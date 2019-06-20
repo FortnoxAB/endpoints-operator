@@ -140,29 +140,12 @@ func syncNodeEndpoints(svc Service) error {
 
 	eps := &v1.Endpoints{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: service.Name,
-			//Labels: c.config.Labels.Merge(map[string]string{
-			//"k8s-app": "kubelet",
-			//}),
+			Name:   service.Name,
+			Labels: service.Labels,
 		},
 		Subsets: []v1.EndpointSubset{
 			{
-				Ports: []v1.EndpointPort{
-					/*
-						{
-							Name: "https-metrics",
-							Port: 10250,
-						},
-						{
-							Name: "http-metrics",
-							Port: 10255,
-						},
-						{
-							Name: "cadvisor",
-							Port: 4194,
-						},
-					*/
-				},
+				Ports: []v1.EndpointPort{},
 			},
 		},
 	}
