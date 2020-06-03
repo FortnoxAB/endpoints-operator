@@ -1,6 +1,6 @@
 library 'whatsout'
 
-node('go1.12') {
+node('go1.13') {
 	container('run'){
 		def tag = ''
 
