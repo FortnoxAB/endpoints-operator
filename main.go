@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +17,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 
 	"k8s.io/client-go/kubernetes"
@@ -29,57 +29,11 @@ import (
 var metricsAddr = flag.String("listen-address", ":8080", "The address to listen on for HTTP metrics requests.")
 var logLevel = flag.String("log-level", "info", "loglevel")
 
-type Service struct {
-	NodeLabelSelector string
-	service           string
-	Name              string
-}
-
-func (s Service) Namespace() string {
-	parts := strings.Split(s.service, "/")
-	return parts[0]
-}
-func (s Service) Service() string {
-	parts := strings.Split(s.service, "/")
-	return parts[1]
-}
-
-var serviceList = []Service{
-	Service{
-		Name: "scheduler",
-	},
-	Service{
-		Name: "controller-manager",
-	},
-}
-
-//--scheduler-node-label=node-role.kubernetes.io/controlplane=true
-//--scheduler-service=kube-system/kube-scheduler-prometheus-discovery
-//--scheduler-node-label=node-role.kubernetes.io/controlplane=true
-//--controller-manager-service=kube-system/kube-controller-manager-prometheus-discovery
-
 var kubeClient corev1client.CoreV1Interface
 
 func main() {
-	fnxlogrus.Init(fnxlogrus.Config{Format: "json", Level: *logLevel}, logrus.StandardLogger())
-
-	for k, v := range serviceList {
-		flag.StringVar(&serviceList[k].NodeLabelSelector, v.Name+"-node-label", "", fmt.Sprintf("node label selector for %s", v.Name))
-		flag.StringVar(&serviceList[k].service, v.Name+"-service", "", fmt.Sprintf("service for %s", v.Name))
-	}
-
 	flag.Parse()
-
-	for _, v := range serviceList {
-		if v.service == "" {
-			continue
-		}
-		parts := strings.Split(v.service, "/")
-		if len(parts) != 2 {
-			logrus.Errorf("malformatted kubelet object string %s, must be in format \"namespace/name\"", v.service)
-			return
-		}
-	}
+	fnxlogrus.Init(fnxlogrus.Config{Format: "json", Level: *logLevel}, logrus.StandardLogger())
 
 	kubeClient = getKubeClient()
 
@@ -118,22 +72,36 @@ func periodicSyncer(stopc <-chan struct{}) {
 	}
 }
 
+var endpointsSyncEnabledService = metav1.LabelSelector{MatchLabels: map[string]string{"endpoints-operator.fnox.se/enabled": "true"}}
+
+const nodeSelectorLabel = "endpoints-operator.fnox.se/node-selector"
+
 func syncAndLog() {
-	for _, svc := range serviceList {
-		if svc.service == "" { // skip unconfigured services
+	servicesToCheck, err := kubeClient.Services("").List(metav1.ListOptions{
+		LabelSelector: labels.Set(endpointsSyncEnabledService.MatchLabels).String(),
+	})
+	if err != nil {
+		logrus.Error(err)
+		return
+	}
+
+	for _, svc := range servicesToCheck.Items {
+		nodeSelector, ok := svc.Annotations[nodeSelectorLabel]
+		if !ok {
+			logrus.Errorf("missing %s label on service %s", nodeSelectorLabel, svc.GetName())
 			continue
 		}
-		err := syncNodeEndpoints(svc)
+
+		err := syncNodeEndpoints(svc.GetNamespace(), svc.GetName(), nodeSelector)
 		if err != nil {
 			logrus.Error(err)
 		}
 	}
 }
 
-func syncNodeEndpoints(svc Service) error {
-
-	logrus.Debugf("starting sync of %s", svc.Name)
-	service, err := kubeClient.Services(svc.Namespace()).Get(svc.Service(), metav1.GetOptions{})
+func syncNodeEndpoints(namespace, svc, nodeSelector string) error {
+	logrus.Debugf("starting sync of %s", svc)
+	service, err := kubeClient.Services(namespace).Get(svc, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -155,10 +123,9 @@ func syncNodeEndpoints(svc Service) error {
 			Name: port.Name,
 			Port: port.Port,
 		})
-
 	}
 
-	nodes, err := kubeClient.Nodes().List(metav1.ListOptions{LabelSelector: svc.NodeLabelSelector})
+	nodes, err := kubeClient.Nodes().List(metav1.ListOptions{LabelSelector: nodeSelector})
 	if err != nil {
 		return errors.Wrap(err, "listing nodes failed")
 	}
