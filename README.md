@@ -3,10 +3,25 @@
 Can be used to create endpoints for controller-manager och scheduler service objects. 
 It will populate endpoints from node selectors and take the ports for the endpoints from the selected service. 
 
-example config flags
+It fetches config from Service object
+Example:
 ```
--scheduler-node-label="node-role.kubernetes.io/controlplane=true" 
--scheduler-service=kube-system/kube-scheduler-prometheus-discovery 
--controller-manager-node-label="node-role.kubernetes.io/controlplane=true" 
--controller-manager-service=kube-system/kube-controller-manager-prometheus-discovery
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    endpoints-operator.fnox.se/node-selector: node-role.kubernetes.io/controlplane=true
+  labels:
+    endpoints-operator.fnox.se/enabled: "true"
+    k8s-app: kube-controller-manager
+  name: kube-controller-manager-prometheus-discovery
+  namespace: kube-system
+spec:
+  clusterIP: None
+  ports:
+  - name: http-metrics
+    port: 10252
+    targetPort: 10252
+  selector:
+    k8s-app: kube-controller-manager
 ```
